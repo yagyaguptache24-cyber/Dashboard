@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Team Board</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .spin { animation: spin 1s linear infinite; display: inline-block; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+  // ====================================================================
+  // PASTE YOUR SUPABASE VALUES HERE (from Project Settings -> API)
+  // ====================================================================
+  window.SUPABASE_URL = "https://qocmrnltwbbohbwnhcjx.supabase.co";
+  window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFvY21ybmx0d2Jib2hid25oY2p4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQzMzQ1NjYsImV4cCI6MjA5OTkxMDU2Nn0.9PtmFaY8dSV0h04raFKEyxVOhmfd-v2-ZShNsxiwO7Q";
+  // ====================================================================
+</script>
+
+<script>
+  window.addEventListener('error', function (e) {
+    var root = document.getElementById('root');
+    if (root && !root.hasChildNodes()) {
+      root.innerHTML =
+        '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:sans-serif;padding:24px;">' +
+        '<div style="max-width:520px;text-align:center;border:1px solid #E4E0D6;border-radius:10px;padding:24px;background:#fff;">' +
+        '<div style="font-size:28px;margin-bottom:8px;">⚠</div>' +
+        '<p style="font-weight:600;margin:0;">Something failed to load</p>' +
+        '<p style="font-size:13px;color:#8B8578;margin-top:10px;word-break:break-word;">' + (e.message || 'Unknown error') + '</p>' +
+        '<p style="font-size:12px;color:#B0AB9E;margin-top:10px;">Take a screenshot of this box (and the browser Console tab) and send it back so this can be fixed.</p>' +
+        '</div></div>';
+    }
+  });
+</script>
+
+<script>
+  // ===== Supabase access via plain REST calls (no client library needed) =====
+  // This matches the exact working pattern from the hiring engine —
+  // no supabase-js library, no CDN/module conflicts, just fetch().
+  var SB_HEADERS = {
+    apikey: window.SUPABASE_ANON_KEY,
+    Authorization: 'Bearer ' + window.SUPABASE_ANON_KEY,
+    'Content-Type': 'application/json',
+  };
+
+  window.sbFetch = async function () {
+    try {
+      const res = await fetch(window.SUPABASE_URL + '/rest/v1/dashboard?id=eq.1&select=data,updated_at', { headers: SB_HEADERS });
+      if (!res.ok) return null;
+      const rows = await res.json();
+      return (rows && rows[0]) || null;
+    } catch (e) { return null; }
+  };
+
+  window.sbPush = async function (members, tasks) {
+    try {
+      const body = JSON.stringify({ id: 1, data: { members, tasks }, updated_at: new Date().toISOString() });
+      const res = await fetch(window.SUPABASE_URL + '/rest/v1/dashboard?on_conflict=id', {
+        method: 'POST',
+        headers: Object.assign({}, SB_HEADERS, { Prefer: 'resolution=merge-duplicates,return=representation' }),
+        body,
+      });
+      return res.ok;
+    } catch (e) { return false; }
+  };
+
+
+</script>
+
+<script type="text/plain" id="app-source">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ====================================================================
+// Supabase is accessed via plain fetch() helpers (window.sbFetch / window.sbPush)
+// defined in the script above — no client library, no CDN conflicts.
+// ====================================================================
+const ROW_ID = 1;
+
+const C = {
+  bg: '#F7F5F0', card: '#FFFFFF', ink: '#2A2822', sub: '#8B8578', faint: '#B0AB9E',
+  line: '#E4E0D6', lineSoft: '#EFEDE7', track: '#EFEDE7', primary: '#1D6F8C', primaryDark: '#175A73',
+};
+const STATUS = {
+  todo: { label: 'To Do', color: '#8B8578' },
+  inprogress: { label: 'In Progress', color: '#1D6F8C' },
+  blocked: { label: 'Blocked', color: '#B4443B' },
+  done: { label: 'Done', color: '#3F7A52' },
+};
+const PRIORITY = {
+  low: { label: 'Low', color: '#8B8578' },
+  medium: { label: 'Medium', color: '#C08A2E' },
+  high: { label: 'High', color: '#B4443B' },
+};
+const AVATAR_COLORS = ['#1D6F8C', '#B4443B', '#3F7A52', '#C08A2E', '#6B5B95', '#A0522D', '#2F6E5B', '#8C4A6B'];
+const uid = () => Math.random().toString(36).slice(2, 10);
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const mono = "'JetBrains Mono', monospace";
+const sans = "'Inter', system-ui, sans-serif";
+
+// --- tiny inline icon glyphs (no external icon library needed) ---
+const Icon = ({ children, size = 14, color, spin, style }) => (
+  <span className={spin ? 'spin' : ''} style={{ fontSize: size, color, lineHeight: 1, display: 'inline-flex', ...style }}>{children}</span>
+);
+const IconPlus = p => <Icon {...p}>＋</Icon>;
+const IconX = p => <Icon {...p}>✕</Icon>;
+const IconSearch = p => <Icon {...p}>⌕</Icon>;
+const IconUsers = p => <Icon {...p} size={p.size||32}>👥</Icon>;
+const IconGrid = p => <Icon {...p}>▦</Icon>;
+const IconChart = p => <Icon {...p}>📊</Icon>;
+const IconWarn = p => <Icon {...p}>⚠</Icon>;
+const IconTrash = p => <Icon {...p}>🗑</Icon>;
+const IconPencil = p => <Icon {...p}>✎</Icon>;
+const IconDone = p => <Icon {...p}>✓</Icon>;
+const IconTodo = p => <Icon {...p}>○</Icon>;
+const IconBlocked = p => <Icon {...p}>⏸</Icon>;
+const IconLoader = p => <Icon {...p} spin>⟳</Icon>;
+
+function StatCard({ label, value, accent }) {
+  const tint = accent ? accent + '14' : C.card;
+  const border = accent ? accent + '35' : C.line;
+  return (
+    <div style={{ flex: '1 1 110px', minWidth: 110, background: tint, border: `1px solid ${border}`, borderRadius: 8, padding: '12px 16px' }}>
+      <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 500, color: accent || C.sub }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 600, marginTop: 4, color: accent || C.ink, fontFamily: mono }}>{value}</div>
+    </div>
+  );
+}
+function Avatar({ name, color, size = 32 }) {
+  const initials = name.split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase();
+  return (
+    <div style={{ width: size, height: size, minWidth: size, borderRadius: '9999px', background: color, color: '#fff', fontWeight: 600, fontSize: size * 0.38, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      {initials}
+    </div>
+  );
+}
+function ProgressBar({ pct, color = C.primary, height = 6 }) {
+  return (
+    <div style={{ width: '100%', background: C.track, borderRadius: 9999, overflow: 'hidden', height }}>
+      <div style={{ height: '100%', borderRadius: 9999, width: `${pct}%`, background: color, transition: 'width 0.4s ease' }} />
+    </div>
+  );
+}
+function Modal({ title, onClose, children, footer }) {
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.card, borderRadius: 12, width: '100%', maxWidth: 420, maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: `1px solid ${C.lineSoft}`, flexShrink: 0 }}>
+          <h3 style={{ fontWeight: 600, color: C.ink, margin: 0 }}>{title}</h3>
+          <button onClick={onClose} style={{ color: C.sub, background: 'none', border: 'none', cursor: 'pointer', display: 'flex' }}><IconX size={18} /></button>
+        </div>
+        <div style={{ padding: 20, overflowY: 'auto', flex: 1 }}>{children}</div>
+        {footer && <div style={{ padding: '12px 20px 20px', borderTop: `1px solid ${C.lineSoft}`, flexShrink: 0 }}>{footer}</div>}
+      </div>
+    </div>
+  );
+}
+function Field({ label, children }) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <label style={{ display: 'block', fontSize: 12, fontWeight: 500, color: C.sub, marginBottom: 4 }}>{label}</label>
+      {children}
+    </div>
+  );
+}
+const inputStyle = { width: '100%', border: `1px solid ${C.line}`, borderRadius: 6, padding: '8px 12px', fontSize: 14, color: C.ink, outline: 'none', fontFamily: sans, boxSizing: 'border-box' };
+function PrimaryButton({ children, disabled, onClick }) {
+  return (
+    <button disabled={disabled} onClick={onClick}
+      style={{ width: '100%', background: disabled ? '#A9C6D2' : C.primary, color: '#fff', border: 'none', borderRadius: 6, padding: '10px 0', fontSize: 14, fontWeight: 500, cursor: disabled ? 'not-allowed' : 'pointer', fontFamily: sans }}>
+      {children}
+    </button>
+  );
+}
+function TagPill({ color, children }) {
+  return <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 4, color, background: color + '18', whiteSpace: 'nowrap' }}>{children}</span>;
+}
+
+function TeamDashboard() {
+  const [members, setMembers] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [connectionError, setConnectionError] = useState(null);
+  const [saveState, setSaveState] = useState('idle');
+  const [lastSynced, setLastSynced] = useState(null);
+  const [tab, setTab] = useState('overview');
+  const [search, setSearch] = useState('');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [filterMember, setFilterMember] = useState('all');
+  const [showMemberModal, setShowMemberModal] = useState(false);
+  const [showTaskModal, setShowTaskModal] = useState(false);
+  const [editingMember, setEditingMember] = useState(null);
+  const [editingTask, setEditingTask] = useState(null);
+  const modalOpenRef = useRef(false);
+  const lastRemoteAt = useRef(null);
+  useEffect(() => { modalOpenRef.current = showMemberModal || showTaskModal; }, [showMemberModal, showTaskModal]);
+
+  // Initial load
+  useEffect(() => {
+    (async () => {
+      const row = await window.sbFetch();
+      if (row === null) {
+        setConnectionError('Could not connect to Supabase. Check that your SUPABASE_URL and SUPABASE_ANON_KEY are correct, and that you ran the setup SQL.');
+        setLoading(false);
+        return;
+      }
+      if (row && row.data) {
+        const loadedMembers = row.data.members || [];
+        const memberIds = new Set(loadedMembers.map(m => m.id));
+        const loadedTasks = (row.data.tasks || []).filter(t => !t.assigneeId || memberIds.has(t.assigneeId));
+        setMembers(loadedMembers);
+        setTasks(loadedTasks);
+        setLastSynced(new Date());
+        lastRemoteAt.current = row.updated_at;
+      } else {
+        // No row yet — create the initial one
+        await window.sbPush([], []);
+      }
+      setLoading(false);
+    })();
+  }, []);
+
+  // Poll for changes made from other computers — same interval/approach as the hiring engine
+  useEffect(() => {
+    const poll = setInterval(async () => {
+      if (modalOpenRef.current) return;
+      const row = await window.sbFetch();
+      if (row && row.updated_at && row.updated_at !== lastRemoteAt.current) {
+        lastRemoteAt.current = row.updated_at;
+        setMembers(row.data.members || []);
+        setTasks(row.data.tasks || []);
+        setLastSynced(new Date());
+      }
+    }, 8000);
+    return () => clearInterval(poll);
+  }, []);
+
+  const persist = useCallback(async (nextMembers, nextTasks) => {
+    setSaveState('saving');
+    const ok = await window.sbPush(nextMembers, nextTasks);
+    setSaveState(ok ? 'saved' : 'error');
+    setTimeout(() => setSaveState('idle'), 1500);
+  }, []);
+
+  const updateMembers = (next) => { setMembers(next); persist(next, tasks); };
+  const updateTasks = (next) => { setTasks(next); persist(members, next); };
+
+  const saveMember = (data) => {
+    if (editingMember) {
+      updateMembers(members.map(m => m.id === editingMember.id ? { ...m, ...data } : m));
+    } else {
+      updateMembers([...members, { id: uid(), color: AVATAR_COLORS[members.length % AVATAR_COLORS.length], ...data }]);
+    }
+    setShowMemberModal(false); setEditingMember(null);
+  };
+  const deleteMember = (id) => {
+    const nextMembers = members.filter(m => m.id !== id);
+    const nextTasks = tasks.filter(t => t.assigneeId !== id);
+    setMembers(nextMembers); setTasks(nextTasks); persist(nextMembers, nextTasks);
+  };
+  const saveTask = (data) => {
+    if (editingTask) {
+      updateTasks(tasks.map(t => t.id === editingTask.id ? { ...t, ...data } : t));
+    } else {
+      updateTasks([...tasks, { id: uid(), ...data }]);
+    }
+    setShowTaskModal(false); setEditingTask(null);
+  };
+  const deleteTask = (id) => updateTasks(tasks.filter(t => t.id !== id));
+  const setTaskStatus = (id, status) => updateTasks(tasks.map(t => t.id === id ? { ...t, status } : t));
+  const isOverdue = (t) => t.dueDate && t.dueDate < todayISO() && t.status !== 'done';
+
+  const filteredTasks = useMemo(() => tasks.filter(t => {
+    if (search && !t.title.toLowerCase().includes(search.toLowerCase())) return false;
+    if (filterStatus !== 'all' && t.status !== filterStatus) return false;
+    if (filterMember !== 'all' && t.assigneeId !== filterMember) return false;
+    return true;
+  }), [tasks, search, filterStatus, filterMember]);
+
+  const stats = useMemo(() => {
+    const total = tasks.length;
+    const done = tasks.filter(t => t.status === 'done').length;
+    const inprogress = tasks.filter(t => t.status === 'inprogress').length;
+    const blocked = tasks.filter(t => t.status === 'blocked').length;
+    const overdue = tasks.filter(isOverdue).length;
+    return { total, done, inprogress, blocked, overdue, pct: total ? Math.round((done / total) * 100) : 0 };
+  }, [tasks]);
+
+  const memberProgress = (memberId) => {
+    const mt = tasks.filter(t => t.assigneeId === memberId);
+    const done = mt.filter(t => t.status === 'done').length;
+    return { total: mt.length, done, pct: mt.length ? Math.round((done / mt.length) * 100) : 0 };
+  };
+
+  if (connectionError) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.bg, padding: 24 }}>
+        <div style={{ maxWidth: 420, background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, padding: 24, textAlign: 'center' }}>
+          <div style={{ fontSize: 28, marginBottom: 8 }}>⚠</div>
+          <p style={{ fontWeight: 600, margin: 0 }}>Connection problem</p>
+          <p style={{ fontSize: 14, color: C.sub, marginTop: 8 }}>{connectionError}</p>
+        </div>
+      </div>
+    );
+  }
+  if (loading) {
+    return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.bg }}><IconLoader size={28} color={C.sub} /></div>;
+  }
+
+  const selectStyle = { fontSize: 14, border: `1px solid ${C.line}`, borderRadius: 6, padding: '6px 10px', background: C.card, color: C.ink, fontFamily: sans };
+
+  return (
+    <div style={{ minHeight: '100vh', background: C.bg, color: C.ink, fontFamily: sans }}>
+      <div style={{ maxWidth: 1000, margin: '0 auto', padding: '24px 20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
+          <div>
+            <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.01em', margin: 0 }}>Team Board</h1>
+            <p style={{ fontSize: 14, color: C.sub, margin: '2px 0 0' }}>{members.length} members · {tasks.length} tasks tracked</p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, color: C.sub, width: 110, textAlign: 'right' }}>
+              {saveState === 'saving' && 'Saving…'}
+              {saveState === 'saved' && 'Saved ✓'}
+              {saveState === 'error' && 'Save failed'}
+              {saveState === 'idle' && lastSynced && `Synced ${lastSynced.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+            </span>
+            <button onClick={() => { setEditingMember(null); setShowMemberModal(true); }}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, fontWeight: 500, border: `1px solid ${C.line}`, background: C.card, color: C.ink, borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}>
+              <IconPlus size={15} /> Member
+            </button>
+            <button onClick={() => { setEditingTask(null); setShowTaskModal(true); }}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, fontWeight: 500, background: C.primary, color: '#fff', border: 'none', borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}>
+              <IconPlus size={15} /> Task
+            </button>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 24 }}>
+          <StatCard label="Total" value={stats.total} accent="#6B5B95" />
+          <StatCard label="In Progress" value={stats.inprogress} accent="#1D6F8C" />
+          <StatCard label="Blocked" value={stats.blocked} accent="#B4443B" />
+          <StatCard label="Done" value={stats.done} accent="#3F7A52" />
+          <StatCard label="Overdue" value={stats.overdue} accent={stats.overdue ? '#B4443B' : undefined} />
+          <div style={{ flex: '2 1 220px', minWidth: 220, background: C.card, border: `1px solid ${C.line}`, borderRadius: 8, padding: '12px 16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 500, color: C.sub }}>Overall Progress</span>
+              <span style={{ fontSize: 14, fontWeight: 600, fontFamily: mono }}>{stats.pct}%</span>
+            </div>
+            <ProgressBar pct={stats.pct} />
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 20, borderBottom: `1px solid ${C.line}` }}>
+          {[{ id: 'overview', label: 'By Member', icon: IconUsers }, { id: 'kanban', label: 'By Status', icon: IconGrid }, { id: 'timeline', label: 'Timeline', icon: IconChart }].map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 14px', fontSize: 14, fontWeight: 500, border: 'none', borderBottom: `2px solid ${tab === t.id ? C.primary : 'transparent'}`, marginBottom: -1, background: 'none', color: tab === t.id ? C.primary : C.sub, cursor: 'pointer' }}>
+              <t.icon size={15} /> {t.label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: C.card, border: `1px solid ${C.line}`, borderRadius: 6, padding: '6px 10px', flex: '1 1 180px' }}>
+            <IconSearch size={14} color={C.sub} />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search tasks…" style={{ fontSize: 14, outline: 'none', border: 'none', width: '100%', color: C.ink, background: 'transparent' }} />
+          </div>
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={selectStyle}>
+            <option value="all">All statuses</option>
+            {Object.entries(STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <select value={filterMember} onChange={e => setFilterMember(e.target.value)} style={selectStyle}>
+            <option value="all">All members</option>
+            {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </div>
+
+        {members.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '64px 20px', background: C.card, border: `1px dashed ${C.line}`, borderRadius: 12 }}>
+            <div style={{ marginBottom: 12 }}><IconUsers size={32} color={C.faint} /></div>
+            <p style={{ fontWeight: 500, margin: 0 }}>No team members yet</p>
+            <p style={{ fontSize: 14, color: C.sub, marginTop: 4 }}>Add your first member to start assigning work.</p>
+          </div>
+        )}
+
+        {tab === 'overview' && members.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
+            {members.map(m => {
+              const mp = memberProgress(m.id);
+              const mTasks = filteredTasks.filter(t => t.assigneeId === m.id);
+              return (
+                <div key={m.id} style={{ background: C.card, borderRadius: 10, padding: 16, border: `1px solid ${C.line}`, borderTop: `3px solid ${m.color}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <Avatar name={m.name} color={m.color} />
+                      <div>
+                        <div style={{ fontWeight: 500, fontSize: 14 }}>{m.name}</div>
+                        <div style={{ fontSize: 12, color: C.sub }}>{m.role}</div>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button onClick={() => { setEditingMember(m); setShowMemberModal(true); }} style={{ color: C.faint, background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex' }}><IconPencil size={13} /></button>
+                      <button onClick={() => deleteMember(m.id)} style={{ color: C.faint, background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex' }}><IconTrash size={13} /></button>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: C.sub, marginBottom: 4 }}>
+                    <span>{mp.done}/{mp.total} tasks done</span>
+                    <span style={{ fontFamily: mono }}>{mp.pct}%</span>
+                  </div>
+                  <ProgressBar pct={mp.pct} color={m.color} />
+                  <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {mTasks.length === 0 && <p style={{ fontSize: 12, color: C.faint, fontStyle: 'italic', padding: '8px 0' }}>No tasks assigned</p>}
+                    {mTasks.map(t => <TaskRow key={t.id} t={t} overdue={isOverdue(t)} onEdit={() => { setEditingTask(t); setShowTaskModal(true); }} onDelete={() => deleteTask(t.id)} />)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {tab === 'kanban' && members.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+            {Object.entries(STATUS).map(([key, s]) => (
+              <div key={key} style={{ borderRadius: 8, padding: 12, minHeight: 120, background: s.color + '0D', border: `1px solid ${s.color}30` }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 9999, background: s.color }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', color: s.color }}>{s.label}</span>
+                  <span style={{ fontSize: 12, color: C.faint }}>{filteredTasks.filter(t => t.status === key).length}</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {filteredTasks.filter(t => t.status === key).map(t => {
+                    const m = members.find(mm => mm.id === t.assigneeId);
+                    return (
+                      <div key={t.id} style={{ background: C.card, borderRadius: 6, padding: 10, border: `1px solid ${C.line}` }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 6 }}>
+                          <span style={{ fontSize: 14, fontWeight: 500, lineHeight: 1.3 }}>{t.title}</span>
+                          <button onClick={() => deleteTask(t.id)} style={{ color: '#D6D2C4', background: 'none', border: 'none', cursor: 'pointer', flexShrink: 0, display: 'flex' }}><IconTrash size={12} /></button>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
+                          {m ? <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Avatar name={m.name} color={m.color} size={20} /><span style={{ fontSize: 12, color: C.sub }}>{m.name}</span></div> : <span style={{ fontSize: 12, color: C.faint }}>Unassigned</span>}
+                          <TagPill color={PRIORITY[t.priority].color}>{PRIORITY[t.priority].label}</TagPill>
+                        </div>
+                        {t.dueDate && <div style={{ fontSize: 11, marginTop: 6, color: isOverdue(t) ? '#B4443B' : C.faint, fontWeight: isOverdue(t) ? 600 : 400 }}>Due {t.dueDate}{isOverdue(t) ? ' (overdue)' : ''}</div>}
+                        <select value={t.status} onChange={e => setTaskStatus(t.id, e.target.value)} style={{ marginTop: 8, width: '100%', fontSize: 12, border: `1px solid ${C.line}`, borderRadius: 4, padding: '4px 6px', background: '#FAFAF7', color: C.ink }}>
+                          {Object.entries(STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {tab === 'timeline' && members.length > 0 && (
+          <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {filteredTasks.filter(t => t.startDate && t.dueDate).length === 0 && <p style={{ fontSize: 14, color: C.sub, fontStyle: 'italic', textAlign: 'center', padding: '32px 0' }}>No tasks with both start and due dates yet.</p>}
+            {filteredTasks.filter(t => t.startDate && t.dueDate).map(t => {
+              const m = members.find(mm => mm.id === t.assigneeId);
+              return (
+                <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ width: 128, flexShrink: 0, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</div>
+                  {m && <Avatar name={m.name} color={m.color} size={22} />}
+                  <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 11, color: C.sub, width: 80, flexShrink: 0, fontFamily: mono }}>{t.startDate}</span>
+                    <div style={{ flex: 1, height: 8, borderRadius: 9999, background: STATUS[t.status].color + '22' }}>
+                      <div style={{ height: '100%', borderRadius: 9999, width: t.status === 'done' ? '100%' : t.status === 'inprogress' ? '55%' : '15%', background: STATUS[t.status].color }} />
+                    </div>
+                    <span style={{ fontSize: 11, color: C.sub, width: 80, flexShrink: 0, textAlign: 'right', fontFamily: mono }}>{t.dueDate}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {showMemberModal && <MemberModal initial={editingMember} onSave={saveMember} onClose={() => { setShowMemberModal(false); setEditingMember(null); }} />}
+      {showTaskModal && <TaskModal initial={editingTask} members={members} onSave={saveTask} onClose={() => { setShowTaskModal(false); setEditingTask(null); }} />}
+    </div>
+  );
+}
+
+function TaskRow({ t, overdue, onEdit, onDelete }) {
+  const icons = { todo: IconTodo, inprogress: IconLoader, blocked: IconBlocked, done: IconDone };
+  const IconComp = icons[t.status];
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6 }}>
+      <IconComp size={14} color={STATUS[t.status].color} />
+      <span style={{ fontSize: 14, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</span>
+      {overdue && <IconWarn size={12} color="#B4443B" />}
+      <TagPill color={PRIORITY[t.priority].color}>{PRIORITY[t.priority].label}</TagPill>
+      <button onClick={onEdit} style={{ color: C.faint, background: 'none', border: 'none', cursor: 'pointer', display: 'flex' }}><IconPencil size={12} /></button>
+      <button onClick={onDelete} style={{ color: C.faint, background: 'none', border: 'none', cursor: 'pointer', display: 'flex' }}><IconTrash size={12} /></button>
+    </div>
+  );
+}
+
+function MemberModal({ initial, onSave, onClose }) {
+  const [name, setName] = useState(initial?.name || '');
+  const [role, setRole] = useState(initial?.role || '');
+  return (
+    <Modal title={initial ? 'Edit member' : 'Add member'} onClose={onClose}
+      footer={<PrimaryButton disabled={!name.trim()} onClick={() => onSave({ name: name.trim(), role: role.trim() || 'Team member' })}>{initial ? 'Save changes' : 'Add member'}</PrimaryButton>}>
+      <Field label="Name"><input style={inputStyle} value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Priya Sharma" /></Field>
+      <Field label="Role"><input style={inputStyle} value={role} onChange={e => setRole(e.target.value)} placeholder="e.g. Frontend Developer" /></Field>
+    </Modal>
+  );
+}
+
+function TaskModal({ initial, members, onSave, onClose }) {
+  const [title, setTitle] = useState(initial?.title || '');
+  const [description, setDescription] = useState(initial?.description || '');
+  const [assigneeId, setAssigneeId] = useState(initial?.assigneeId || (members[0]?.id || ''));
+  const [status, setStatus] = useState(initial?.status || 'todo');
+  const [priority, setPriority] = useState(initial?.priority || 'medium');
+  const [startDate, setStartDate] = useState(initial?.startDate || todayISO());
+  const [dueDate, setDueDate] = useState(initial?.dueDate || '');
+
+  return (
+    <Modal title={initial ? 'Edit task' : 'Add task'} onClose={onClose}
+      footer={<PrimaryButton disabled={!title.trim() || !dueDate} onClick={() => onSave({ title: title.trim(), description, assigneeId, status, priority, startDate, dueDate })}>{initial ? 'Save changes' : 'Add task'}</PrimaryButton>}>
+      <Field label="Title"><input style={inputStyle} value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Build login page" /></Field>
+      <Field label="Description"><textarea style={{ ...inputStyle, resize: 'vertical' }} rows={2} value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional details" /></Field>
+      <Field label="Assign to">
+        <select style={inputStyle} value={assigneeId} onChange={e => setAssigneeId(e.target.value)}>
+          <option value="">Unassigned</option>
+          {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+        </select>
+      </Field>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <Field label="Status">
+          <select style={inputStyle} value={status} onChange={e => setStatus(e.target.value)}>
+            {Object.entries(STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+        </Field>
+        <Field label="Priority">
+          <select style={inputStyle} value={priority} onChange={e => setPriority(e.target.value)}>
+            {Object.entries(PRIORITY).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+        </Field>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <Field label="Start date"><input type="date" style={inputStyle} value={startDate} onChange={e => setStartDate(e.target.value)} /></Field>
+        <Field label="Due date *"><input type="date" required style={inputStyle} value={dueDate} onChange={e => setDueDate(e.target.value)} /></Field>
+      </div>
+    </Modal>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<TeamDashboard />);
+</script>
+
+<script>
+  var srcEl = document.getElementById('app-source');
+  try {
+    var out = Babel.transform(srcEl.textContent, { presets: [['react', { runtime: 'classic' }]] }).code;
+    (0, eval)(out);
+  } catch (err) {
+    document.getElementById('root').innerHTML =
+      '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:sans-serif;padding:24px;">' +
+      '<div style="max-width:520px;text-align:center;border:1px solid #E4E0D6;border-radius:10px;padding:24px;background:#fff;">' +
+      '<div style="font-size:28px;margin-bottom:8px;">⚠</div>' +
+      '<p style="font-weight:600;margin:0;">Something failed to load</p>' +
+      '<p style="font-size:13px;color:#8B8578;margin-top:10px;word-break:break-word;">' + (err && err.message) + '</p>' +
+      '</div></div>';
+  }
+</script>
+</body>
+</html>
