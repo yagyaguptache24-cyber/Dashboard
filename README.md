@@ -33,4 +33,10 @@ The entire app lives in one HTML file. On load, it fetches the current board sta
 ```
 4. Open the file directly in a browser — no build or install needed
 
-## Why I
+## Why I Built This
+
+At Flipspaces, our team needed a fast way to track ownership and status across overlapping workstreams without adopting a heavier tool like Jira or Asana. This dashboard prioritizes speed and simplicity — anyone can open it, see the board, and update a task status in two clicks.
+
+## Notes
+
+This is a demo/portfolio version. The original internal Flipspaces credentials have been removed — you'll need to connect your own Supabase project to use it live.
